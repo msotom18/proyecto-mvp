@@ -1,1 +1,1 @@
-id,fecha_recepcion,rut_emisor,razon_social_emisor,folio,fecha_emision,condicion_pago,monto_neto,iva,monto_total,glosa,numero_oc,servicio,cuenta_contable,origen,estado_validacion,motivo_revision,archivo
+id,fecha_recepcion,tipo_documento,rut_emisor,razon_social_emisor,folio,fecha_emision,fecha_vencimiento,condicion_pago,monto_neto,monto_exento,iva,monto_total,glosa,numero_oc,servicio,cuenta,concepto,ceco,clasificacion_origen,origen,estado_validacion,motivo_revision,archivo
