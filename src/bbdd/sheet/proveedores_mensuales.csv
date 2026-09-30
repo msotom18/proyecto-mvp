@@ -1,0 +1,6 @@
+rut_emisor,razon_social,servicio,cuenta_contable,patron_facturacion,contacto_email,activo
+77.123.456-9,Servicios de Aseo Brillo Total SpA,Aseo y Limpieza,5101-01,primer_lunes,facturacion@ejemplo.cl,SI
+76.987.654-5,Climatizacion Andes Ltda.,Mantención Climatización,5101-02,primeros_5_dias,facturacion@ejemplo.cl,SI
+77.888.999-4,PrintOffice Arriendos SpA,Arriendo Impresoras,5102-01,ultimo_dia_habil,facturacion@ejemplo.cl,SI
+96.111.222-2,Conecta Fibra Empresas S.A.,Telecomunicaciones e Internet,5103-01,primeros_5_dias,facturacion@ejemplo.cl,SI
+77.333.444-7,Seguridad Guardian SpA,Seguridad y Vigilancia,5101-03,irregular,facturacion@ejemplo.cl,SI

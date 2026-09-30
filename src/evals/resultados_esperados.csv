@@ -1,0 +1,9 @@
+archivo,rut_emisor,razon_social_emisor,folio,fecha_emision,condicion_pago,monto_neto,iva,monto_total,glosa,validacion_esperada,nota
+F01_servicios_18452.pdf,77.123.456-9,Servicios de Aseo Brillo Total SpA,18452,2026-09-01,Credito 30 dias,1350000,256500,1606500,Servicio de aseo mensual septiembre 2026 - 2.000 m2,OK,
+F02_climatizacion_3021.pdf,76.987.654-5,Climatizacion Andes Ltda.,3021,2026-09-03,Contado,610000,115900,725900,Mantencion preventiva equipos de clima - contrato mensual | Recambio filtros HEPA,OK,
+F03_insumos_551203.pdf,96.555.444-0,Insumos Medicos del Pacifico S.A.,551203,2026-09-04,Credito 60 dias,486330,92403,578733,Guantes nitrilo talla M caja x100 | Mascarillas quirurgicas caja x50 | Jeringas 5 ml caja x100 | Alcohol gel 1 L | Placas Petri esteriles x20,OK,
+F04_gases_7719.pdf,76.222.333-3,Gases Medicinales Sur SpA,7719,2026-09-08,Credito 30 dias,482000,91580,573580,Nitrogeno liquido para criopreservacion (litros) | Arriendo termo criogenico,OK,
+F05_printoffice_90412.pdf,77.888.999-4,PrintOffice Arriendos SpA,90412,2026-09-10,Credito 30 dias,253200,48108,301308,Arriendo mensual 3 multifuncionales | Excedente de impresion (paginas),OK,
+F06_conecta_1204488.pdf,96.111.222-2,Conecta Fibra Empresas S.A.,1204488,2026-09-12,Contado,164900,31331,196231,Plan fibra empresa 1 Gbps - septiembre 2026 | Telefonia IP 10 anexos,OK,
+F07_lavanderia_2290.pdf,76.444.555-4,Lavanderia Clinica Blanco Ltda.,2290,2026-09-15,Credito 30 dias,400000,72000,472000,Lavado de ropa clinica (kg),REVISAR,IVA impreso no es 19% del neto
+F08_mantenciones_615.pdf,77.555.666-8,Mantenciones Electricas Volta SpA,615,2026-09-17,Contado,321700,61123,382823,Revision tablero electrico y cambio de automaticos | Automatico 2x25A,OK,PDF escaneado (imagen)
