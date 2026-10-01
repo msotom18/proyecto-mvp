@@ -1,0 +1,288 @@
+{
+  "name": "SGF - Alerta proveedores sin factura",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "triggerAtHour": 18
+            }
+          ]
+        }
+      },
+      "id": "bfa2b7f5-775f-404b-b442-958eedfd8c0c",
+      "name": "Todos los días 18:00",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Solo sigue el último día del mes (o siempre si lo ejecutas manualmente para probar).\nconst hoy = new Date();\nconst ultimo = new Date(hoy.getFullYear(), hoy.getMonth() + 1, 0).getDate();\nif (hoy.getDate() !== ultimo && $execution.mode !== 'manual') return [];\nconst mes = hoy.getFullYear() + '-' + String(hoy.getMonth() + 1).padStart(2, '0');\nreturn [{ json: { mes } }];"
+      },
+      "id": "affbdcee-b213-4aab-935c-4852a50b6172",
+      "name": "¿Es fin de mes?",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        224,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "https://docs.google.com/spreadsheets/d/1DX-iBKnZ8bsu-5b1b25KZcMaZZGmCs4q7z162_JQcdQ/edit?usp=sharing",
+          "mode": "url"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "proveedores_mensuales",
+          "mode": "name"
+        },
+        "options": {}
+      },
+      "id": "67f8c2e7-56af-4962-b502-f8ef9f101a02",
+      "name": "Leer proveedores mensuales",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        448,
+        0
+      ],
+      "executeOnce": true,
+      "alwaysOutputData": true,
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "9QFoVSojCdnkGFLE",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "https://docs.google.com/spreadsheets/d/1DX-iBKnZ8bsu-5b1b25KZcMaZZGmCs4q7z162_JQcdQ/edit?usp=sharing",
+          "mode": "url"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "facturas",
+          "mode": "name"
+        },
+        "options": {}
+      },
+      "id": "3429c5d9-b777-4cf2-8f5f-1e810936e95d",
+      "name": "Leer facturas",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        672,
+        0
+      ],
+      "executeOnce": true,
+      "alwaysOutputData": true,
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "9QFoVSojCdnkGFLE",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Compara proveedores habituales activos contra las facturas recibidas este mes.\nconst mes = $('¿Es fin de mes?').first().json.mes;\nconst limpiaRut = r => String(r || '').replace(/\\./g, '').trim().toUpperCase();\nconst recibidos = new Set(\n  $('Leer facturas').all().map(i => i.json)\n    .filter(f => f.rut_emisor && String(f.fecha_emision || f.fecha_recepcion || '').startsWith(mes))\n    .map(f => limpiaRut(f.rut_emisor))\n);\nconst faltan = $('Leer proveedores mensuales').all().map(i => i.json)\n  .filter(p => p.rut_emisor && String(p.activo).toUpperCase() === 'SI' && !recibidos.has(limpiaRut(p.rut_emisor)));\nif (!faltan.length) return [];\nconst filas = faltan.map(p =>\n  `<tr><td>${p.razon_social}</td><td>${p.rut_emisor}</td><td>${p.servicio || ''}</td><td>${p.patron_facturacion || ''}</td></tr>`).join('');\nconst html = `<p>Las siguientes empresas no han facturado este mes (${mes}):</p>\n<table border=\"1\" cellpadding=\"6\" cellspacing=\"0\">\n<tr><th>Empresa</th><th>RUT</th><th>Servicio</th><th>Patrón de facturación</th></tr>${filas}</table>\n<p>Mensaje automático del sistema de facturas SGFertility.</p>`;\nreturn [{ json: { mes, cantidad: faltan.length, html, empresas: faltan.map(p => p.razon_social).join(', ') } }];"
+      },
+      "id": "b1ee2f4f-350c-4df0-93cb-646b23006a9a",
+      "name": "Detectar faltantes",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        880,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "sendTo": "gruposfg1@gmail.com",
+        "subject": "=Proveedores sin factura – {{ $json.mes }}",
+        "message": "={{ $json.html }}",
+        "options": {
+          "appendAttribution": false
+        }
+      },
+      "id": "a3fd39d6-c94a-4764-bc4d-525025e40ab6",
+      "name": "Enviar alerta",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        1104,
+        0
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "webhookId": "9fb299f5-4ab1-407d-96c1-4dab68e8313e",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "3A07NDjGvzqBgODn",
+          "name": "Gmail account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "return [{ json: {\n  timestamp: new Date().toISOString(),\n  workflow: 'SGF - Alerta proveedores sin factura',\n  estado: 'ENVIADO',\n  detalle: `${$('Detectar faltantes').first().json.cantidad} empresas sin factura: ${$('Detectar faltantes').first().json.empresas}`.slice(0, 500),\n} }];"
+      },
+      "id": "7836f904-a18f-4556-9517-ef91d9b1a1cc",
+      "name": "Log alerta",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1328,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "https://docs.google.com/spreadsheets/d/1DX-iBKnZ8bsu-5b1b25KZcMaZZGmCs4q7z162_JQcdQ/edit?usp=sharing",
+          "mode": "url"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "logs",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": {},
+          "matchingColumns": [],
+          "schema": []
+        },
+        "options": {
+          "cellFormat": "RAW"
+        }
+      },
+      "id": "06934a18-fff4-41c3-aa7c-6eaea4119070",
+      "name": "Guardar log",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        1552,
+        0
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000,
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "9QFoVSojCdnkGFLE",
+          "name": "Google Sheets account"
+        }
+      }
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Todos los días 18:00": {
+      "main": [
+        [
+          {
+            "node": "¿Es fin de mes?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "¿Es fin de mes?": {
+      "main": [
+        [
+          {
+            "node": "Leer proveedores mensuales",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Leer proveedores mensuales": {
+      "main": [
+        [
+          {
+            "node": "Leer facturas",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Leer facturas": {
+      "main": [
+        [
+          {
+            "node": "Detectar faltantes",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Detectar faltantes": {
+      "main": [
+        [
+          {
+            "node": "Enviar alerta",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Enviar alerta": {
+      "main": [
+        [
+          {
+            "node": "Log alerta",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log alerta": {
+      "main": [
+        [
+          {
+            "node": "Guardar log",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": true
+  },
+  "versionId": "307a5128-be94-4b03-9ed1-b679f43106b4",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "8924fd36757bf5f50e263d8756a655f7dcfd036f5a781faeb1b0c2b1fc6319a9"
+  },
+  "nodeGroups": [],
+  "id": "ssawzRym0VtcO06r",
+  "tags": []
+}

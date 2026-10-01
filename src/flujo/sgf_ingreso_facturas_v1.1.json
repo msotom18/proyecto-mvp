@@ -1,0 +1,1023 @@
+{
+  "name": "SGF - Ingreso facturas",
+  "nodes": [
+    {
+      "parameters": {
+        "pollTimes": {
+          "item": [
+            {
+              "mode": "everyMinute"
+            }
+          ]
+        },
+        "simple": false,
+        "filters": {
+          "q": "has:attachment (filename:pdf OR filename:xml)"
+        },
+        "options": {
+          "dataPropertyAttachmentsPrefixName": "attachment_",
+          "downloadAttachments": true
+        }
+      },
+      "id": "46878373-6f78-41ed-81bb-d93a90b1309d",
+      "name": "Correo con factura",
+      "type": "n8n-nodes-base.gmailTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -1104,
+        128
+      ],
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "3A07NDjGvzqBgODn",
+          "name": "Gmail account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Separa cada adjunto PDF/XML del correo en un item propio.\n// Si el correo trae XML de factura electrónica, se usa el XML y se ignora el PDF.\nconst out = [];\nconst items = $input.all();\nfor (let i = 0; i < items.length; i++) {\n  const it = items[i];\n  const bin = it.binary || {};\n  const meta = {\n    message_id: it.json.id || '',\n    remitente: it.json.from?.value?.[0]?.address || '',\n    asunto: it.json.subject || '',\n    fecha_recepcion: new Date(it.json.date || Date.now()).toISOString(),\n  };\n  const adjuntos = [];\n  for (const key of Object.keys(bin)) {\n    const b = bin[key];\n    const nombre = (b.fileName || key).toLowerCase();\n    const mime = (b.mimeType || '').toLowerCase();\n    const esXml = nombre.endsWith('.xml') || mime.includes('xml');\n    const esPdf = nombre.endsWith('.pdf') || mime.includes('pdf');\n    if (!esXml && !esPdf) continue;\n    const buf = await this.helpers.getBinaryDataBuffer(i, key);\n    let contenido;\n    if (esXml) {\n      const cabecera = buf.subarray(0, 120).toString('ascii');\n      contenido = buf.toString(/ISO-8859-1/i.test(cabecera) ? 'latin1' : 'utf8');\n    } else {\n      contenido = buf.toString('base64');\n    }\n    adjuntos.push({ tipo: esXml ? 'xml' : 'pdf', archivo: b.fileName || key, contenido });\n  }\n  const usar = adjuntos.some(a => a.tipo === 'xml') ? adjuntos.filter(a => a.tipo === 'xml') : adjuntos;\n  for (const a of usar) out.push({ json: { ...meta, ...a }, pairedItem: { item: i } });\n}\nreturn out;"
+      },
+      "id": "5a6ba087-4264-4608-8b0b-3a7da6ece53a",
+      "name": "Separar adjuntos",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -880,
+        128
+      ]
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "https://docs.google.com/spreadsheets/d/1DX-iBKnZ8bsu-5b1b25KZcMaZZGmCs4q7z162_JQcdQ/edit?usp=sharing",
+          "mode": "url"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "catalogo_proveedores",
+          "mode": "name"
+        },
+        "options": {}
+      },
+      "id": "e79a2abf-8ae2-42be-a176-26956311fd30",
+      "name": "Leer catálogo",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        -656,
+        128
+      ],
+      "executeOnce": true,
+      "alwaysOutputData": true,
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "9QFoVSojCdnkGFLE",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Recupera los documentos separados (el nodo anterior solo cargó el catálogo una vez).\nreturn $('Separar adjuntos').all().map((it, i) => ({ json: it.json, pairedItem: { item: i } }));"
+      },
+      "id": "a595721d-4d63-404e-91d1-83e21a69c6ce",
+      "name": "Documentos",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -448,
+        128
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "9bd842cc-b9ad-4361-97e6-9733ae67823e",
+              "leftValue": "={{ $json.tipo }}",
+              "rightValue": "xml",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "32b8f0bc-a9e9-4858-b681-b034bba34277",
+      "name": "¿Es XML?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -224,
+        128
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Lee el XML de factura electrónica del SII sin usar IA.\nconst tag = (x, t) => {\n  const m = (x || '').match(new RegExp('<' + t + '>([\\\\s\\\\S]*?)</' + t + '>'));\n  return m ? m[1].trim() : null;\n};\nconst num = v => (v == null || v === '') ? 0 : Number(v);\nconst TIPOS = { '33': 'factura_afecta', '34': 'factura_exenta', '61': 'nota_credito' };\nconst fmtRut = r => {\n  if (!r) return null;\n  const [cuerpo, dv] = r.replace(/\\./g, '').split('-');\n  return cuerpo.replace(/\\B(?=(\\d{3})+(?!\\d))/g, '.') + '-' + (dv || '').toUpperCase();\n};\nreturn $input.all().map((it, i) => {\n  const x = it.json.contenido;\n  const doc = (x.match(/<Documento[\\s\\S]*?<\\/Documento>/) || [x])[0];\n  const items = [...doc.matchAll(/<Detalle>([\\s\\S]*?)<\\/Detalle>/g)]\n    .map(m => ({ descripcion: tag(m[1], 'NmbItem'), monto: num(tag(m[1], 'MontoItem')) }));\n  const refs = [...doc.matchAll(/<Referencia>([\\s\\S]*?)<\\/Referencia>/g)].map(m => m[1]);\n  const oc = refs.find(r => tag(r, 'TpoDocRef') === '801');\n  const { contenido, tipo, ...meta } = it.json;\n  return {\n    json: {\n      ...meta,\n      origen: 'XML',\n      factura: {\n        tipo_documento: TIPOS[tag(doc, 'TipoDTE')] || ('dte_' + tag(doc, 'TipoDTE')),\n        rut_emisor: fmtRut(tag(doc, 'RUTEmisor')),\n        razon_social_emisor: tag(doc, 'RznSoc'),\n        folio: tag(doc, 'Folio'),\n        fecha_emision: tag(doc, 'FchEmis'),\n        fecha_vencimiento: tag(doc, 'FchVenc'),\n        condicion_pago: tag(doc, 'TermPagoGlosa') || tag(doc, 'FmaPago'),\n        monto_neto: num(tag(doc, 'MntNeto')),\n        monto_exento: num(tag(doc, 'MntExe')),\n        iva: num(tag(doc, 'IVA')),\n        monto_total: num(tag(doc, 'MntTotal')),\n        glosa: items.map(x => x.descripcion).filter(Boolean).join('; ').slice(0, 200),\n        numero_oc: oc ? tag(oc, 'FolioRef') : null,\n        items,\n      },\n    },\n    pairedItem: { item: i },\n  };\n});"
+      },
+      "id": "8c6cab53-9126-48b9-81fc-d79d8e73abe3",
+      "name": "Leer XML (SII)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Convierte el PDF a binario para que Claude lo lea completo (sirve para PDF digital y escaneado).\nconst out = [];\nconst items = $input.all();\nfor (let i = 0; i < items.length; i++) {\n  const { contenido, tipo, ...meta } = items[i].json;\n  const data = await this.helpers.prepareBinaryData(\n    Buffer.from(contenido, 'base64'), meta.archivo || 'factura.pdf', 'application/pdf');\n  out.push({ json: { meta }, binary: { data }, pairedItem: { item: i } });\n}\nreturn out;"
+      },
+      "id": "4d9d2192-faf1-4bd0-aa99-d2c652a5ce92",
+      "name": "Preparar PDF",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        0,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// Toma el JSON devuelto por Claude y lo une con los datos del correo.\nconst textoDe = j => {\n  if (typeof j === 'string') return j;\n  if (Array.isArray(j?.content)) return j.content.filter(c => c.type === 'text').map(c => c.text).join('');\n  if (typeof j?.content === 'string') return j.content;\n  return j?.text || j?.output || j?.response || j?.merged_response || '';\n};\nconst texto = textoDe($json);\nlet factura;\ntry {\n  factura = JSON.parse((texto.match(/\\{[\\s\\S]*\\}/) || ['{}'])[0]);\n} catch (e) {\n  factura = { error_parseo: texto.slice(0, 300) };\n}\nif (!texto) factura = { error_parseo: 'Respuesta vacía: ' + JSON.stringify($json).slice(0, 250) };\nconst meta = $('Preparar PDF').item.json.meta;\nreturn { json: { ...meta, origen: 'PDF', factura } };"
+      },
+      "id": "efd530c5-9eae-4505-bff3-1b60c7facf8a",
+      "name": "Leer respuesta IA",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        448,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// 1) Valida montos y RUT. 2) Clasifica con el catálogo histórico de contabilidad.\nconst catalogo = $('Leer catálogo').all().map(i => i.json).filter(r => r.proveedor);\nconst norm = s => ' ' + (s || '').toUpperCase().normalize('NFD').replace(/[\\u0300-\\u036f]/g, '')\n  .replace(/[^A-Z0-9]+/g, ' ') + ' ';\nconst limpiar = s => norm(s)\n  .replace(/ (SOCIEDAD ANONIMA|SOCIEDAD|SPA|S P A|S A|LTDA|LIMITADA|EIRL|E I R L|CIA|Y CIA|CHILE) /g, ' ')\n  .replace(/ (SOCIEDAD ANONIMA|SOCIEDAD|SPA|S P A|S A|LTDA|LIMITADA|EIRL|E I R L|CIA|Y CIA|CHILE) /g, ' ')\n  .replace(/\\s+/g, ' ').trim();\nconst porProveedor = {};\nfor (const r of catalogo) (porProveedor[limpiar(r.proveedor)] ||= []).push(r);\nconst opciones = [...new Map(catalogo.map(r => [r.cuenta + '|' + r.concepto,\n  { cuenta: String(r.cuenta), nombre_cuenta: r.nombre_cuenta, concepto: r.concepto }])).values()];\n\nconst rutValido = r => {\n  const m = (r || '').replace(/\\./g, '').toUpperCase().match(/^(\\d{6,9})-([\\dK])$/);\n  if (!m) return false;\n  let s = 0, mul = 2;\n  for (const d of m[1].split('').reverse()) { s += Number(d) * mul; mul = mul === 7 ? 2 : mul + 1; }\n  const dv = 11 - (s % 11);\n  return (dv === 11 ? '0' : dv === 10 ? 'K' : String(dv)) === m[2];\n};\n\nreturn $input.all().map((it, i) => {\n  const f = it.json.factura || {};\n  const motivos = [];\n  if (f.error_parseo) motivos.push('La IA no devolvió un JSON válido');\n  for (const c of ['rut_emisor', 'folio', 'fecha_emision', 'monto_total'])\n    if (f[c] == null || f[c] === '' || f[c] === 0) motivos.push('Falta ' + c);\n  if (f.rut_emisor && !rutValido(f.rut_emisor)) motivos.push('RUT emisor con dígito verificador inválido');\n  const neto = Number(f.monto_neto) || 0, exento = Number(f.monto_exento) || 0;\n  const iva = Number(f.iva) || 0, total = Number(f.monto_total) || 0;\n  if (f.tipo_documento !== 'factura_exenta' && neto > 0 && Math.abs(iva - Math.round(neto * 0.19)) > 1)\n    motivos.push('IVA no es 19% del neto');\n  if (Math.abs(neto + exento + iva - total) > 1) motivos.push('Neto + exento + IVA no suma el total');\n  const items = Array.isArray(f.items) ? f.items : [];\n  if (items.length && Math.abs(items.reduce((s, x) => s + (Number(x.monto) || 0), 0) - (neto + exento)) > 1)\n    motivos.push('La suma de los ítems no cuadra con neto + exento');\n\n  // Clasificación por catálogo\n  const clave = limpiar(f.razon_social_emisor);\n  let candidatos = porProveedor[clave] || [];\n  if (!candidatos.length && clave.length >= 5) {\n    const k = Object.keys(porProveedor).find(p => p.length >= 5 && (p.includes(clave) || clave.includes(p)));\n    if (k) candidatos = porProveedor[k];\n  }\n  let clasif = null;\n  if (candidatos.length === 1) {\n    const r = candidatos[0];\n    clasif = { cuenta: String(r.cuenta), nombre_cuenta: r.nombre_cuenta, concepto: r.concepto, ceco: r.ceco, origen: 'CATALOGO' };\n  }\n  return {\n    json: { ...it.json, validacion: { motivos }, clasif, necesita_ia: !clasif, candidatos, opciones },\n    pairedItem: { item: i },\n  };\n});"
+      },
+      "id": "14511d01-7760-4f5a-93ee-bd96680b9100",
+      "name": "Validar y clasificar",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        448,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "3fbbf231-f2d3-4590-93cc-ff194f240525",
+              "leftValue": "={{ $json.necesita_ia }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "8ded4908-571b-44a8-8862-bdd172aa1d91",
+      "name": "¿Necesita clasificación IA?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        672,
+        128
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Arma la consulta de clasificación para proveedores nuevos o con más de una cuenta posible.\nreturn $input.all().map((it, i) => {\n  const f = it.json.factura || {};\n  const { opciones, candidatos, ...base } = it.json;\n  const prompt = [\n    'Clasifica contablemente una factura recibida por la clínica SGFertility.',\n    'Proveedor: ' + (f.razon_social_emisor || 'desconocido'),\n    'Ítems: ' + JSON.stringify((f.items || []).map(x => x.descripcion)),\n    'Glosa: ' + (f.glosa || ''),\n    'Clasificaciones históricas de este proveedor (pueden estar vacías): ' +\n      JSON.stringify(candidatos.map(c => ({ cuenta: String(c.cuenta), nombre_cuenta: c.nombre_cuenta, concepto: c.concepto, ceco: c.ceco, pct: c.pct_del_proveedor }))),\n    'Opciones válidas de cuenta y concepto: ' + JSON.stringify(opciones),\n    'Elige UNA combinación que exista en las opciones válidas; si los ítems calzan con una clasificación histórica, prefiérela.',\n    'Si no hay información de CECO usa \"ADMINISTRACION\".',\n    'Responde SOLO un objeto JSON, sin texto adicional ni bloques de código, con: cuenta, nombre_cuenta, concepto, ceco, confianza (número entre 0 y 1) y justificacion (una frase).',\n  ].join('\\n');\n  return { json: { base, prompt }, pairedItem: { item: i } };\n});"
+      },
+      "id": "94990849-8d48-44bf-9a16-62847a9c35f4",
+      "name": "Preparar clasificación",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        880,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// Aplica la clasificación sugerida por Claude.\nconst textoDe = j => {\n  if (typeof j === 'string') return j;\n  if (Array.isArray(j?.content)) return j.content.filter(c => c.type === 'text').map(c => c.text).join('');\n  if (typeof j?.content === 'string') return j.content;\n  return j?.text || j?.output || j?.response || j?.merged_response || '';\n};\nconst texto = textoDe($json);\nlet r = {};\ntry { r = JSON.parse((texto.match(/\\{[\\s\\S]*\\}/) || ['{}'])[0]); } catch (e) {}\nconst base = $('Preparar clasificación').item.json.base;\nconst motivos = [...base.validacion.motivos];\nif (!r.cuenta) motivos.push('La IA no pudo clasificar la factura');\nelse if (Number(r.confianza) < 0.6) motivos.push('Clasificación IA con baja confianza');\nreturn {\n  json: {\n    ...base,\n    validacion: { motivos },\n    clasif: {\n      cuenta: r.cuenta ? String(r.cuenta) : '',\n      nombre_cuenta: r.nombre_cuenta || '',\n      concepto: r.concepto || '',\n      ceco: r.ceco || 'ADMINISTRACION',\n      origen: 'LLM',\n    },\n  },\n};"
+      },
+      "id": "fa9e0c1b-38cf-48b4-aef1-855796763fb6",
+      "name": "Leer clasificación",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1328,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// Arma la fila de cabecera (facturas) y las filas de detalle (facturas_detalle).\nconst f = $json.factura || {};\nconst c = $json.clasif || {};\nconst motivos = $json.validacion?.motivos || [];\nconst signo = f.tipo_documento === 'nota_credito' ? -1 : 1;\nconst n = v => signo * (Number(v) || 0);\nconst fila = {\n  id: (f.rut_emisor || 'SIN-RUT') + '_' + (f.folio || 'SIN-FOLIO'),\n  fecha_recepcion: $json.fecha_recepcion,\n  tipo_documento: f.tipo_documento || '',\n  rut_emisor: f.rut_emisor || '',\n  razon_social_emisor: f.razon_social_emisor || '',\n  folio: f.folio != null ? String(f.folio) : '',\n  fecha_emision: f.fecha_emision || '',\n  fecha_vencimiento: f.fecha_vencimiento || '',\n  condicion_pago: f.condicion_pago || '',\n  monto_neto: n(f.monto_neto),\n  monto_exento: n(f.monto_exento),\n  iva: n(f.iva),\n  monto_total: n(f.monto_total),\n  glosa: f.glosa || '',\n  numero_oc: f.numero_oc != null ? String(f.numero_oc) : '',\n  servicio: '',\n  cuenta: c.cuenta || '',\n  concepto: c.concepto || '',\n  ceco: c.ceco || '',\n  clasificacion_origen: c.origen || '',\n  origen: $json.origen,\n  estado_validacion: motivos.length ? 'REVISAR' : 'OK',\n  motivo_revision: motivos.join('; '),\n  archivo: $json.archivo || '',\n};\nconst lineas = (Array.isArray(f.items) && f.items.length)\n  ? f.items\n  : [{ descripcion: f.glosa || '', monto: (Number(f.monto_neto) || 0) + (Number(f.monto_exento) || 0) }];\nconst detalle = lineas.map(x => ({\n  folio: fila.folio,\n  rut_emisor: fila.rut_emisor,\n  proveedor: fila.razon_social_emisor,\n  fecha: fila.fecha_emision,\n  descripcion: x.descripcion || '',\n  monto: n(x.monto),\n  cuenta: fila.cuenta,\n  nombre_cuenta: c.nombre_cuenta || '',\n  concepto: fila.concepto,\n  ceco: fila.ceco,\n}));\nreturn { json: { fila, detalle } };"
+      },
+      "id": "98c6b5a9-3aea-43de-804b-27568246a252",
+      "name": "Preparar filas",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1552,
+        128
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "return $input.all().map((it, i) => ({ json: it.json.fila, pairedItem: { item: i } }));"
+      },
+      "id": "cd2df219-b43b-4062-95f7-b461427c83f2",
+      "name": "Fila factura",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1760,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "https://docs.google.com/spreadsheets/d/1DX-iBKnZ8bsu-5b1b25KZcMaZZGmCs4q7z162_JQcdQ/edit?usp=sharing",
+          "mode": "url"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "facturas",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": {},
+          "matchingColumns": [
+            "id"
+          ],
+          "schema": [
+            {
+              "id": "id",
+              "displayName": "id",
+              "required": false,
+              "defaultMatch": true,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "fecha_recepcion",
+              "displayName": "fecha_recepcion",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "tipo_documento",
+              "displayName": "tipo_documento",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "rut_emisor",
+              "displayName": "rut_emisor",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "razon_social_emisor",
+              "displayName": "razon_social_emisor",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "folio",
+              "displayName": "folio",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "fecha_emision",
+              "displayName": "fecha_emision",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "fecha_vencimiento",
+              "displayName": "fecha_vencimiento",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "condicion_pago",
+              "displayName": "condicion_pago",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "monto_neto",
+              "displayName": "monto_neto",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "monto_exento",
+              "displayName": "monto_exento",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "iva",
+              "displayName": "iva",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "monto_total",
+              "displayName": "monto_total",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "glosa",
+              "displayName": "glosa",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "numero_oc",
+              "displayName": "numero_oc",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "servicio",
+              "displayName": "servicio",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "cuenta",
+              "displayName": "cuenta",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "concepto",
+              "displayName": "concepto",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "ceco",
+              "displayName": "ceco",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "clasificacion_origen",
+              "displayName": "clasificacion_origen",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "origen",
+              "displayName": "origen",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "estado_validacion",
+              "displayName": "estado_validacion",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "motivo_revision",
+              "displayName": "motivo_revision",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "archivo",
+              "displayName": "archivo",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {
+          "cellFormat": "RAW"
+        }
+      },
+      "id": "e9b64a3e-4119-46ef-8887-12d79619e10a",
+      "name": "Guardar factura",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        1984,
+        0
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000,
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "9QFoVSojCdnkGFLE",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "return $input.all().flatMap((it, i) => it.json.detalle.map(d => ({ json: d, pairedItem: { item: i } })));"
+      },
+      "id": "99560c22-393e-4a3b-8a0b-edc5d95331dd",
+      "name": "Filas detalle",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1760,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "https://docs.google.com/spreadsheets/d/1DX-iBKnZ8bsu-5b1b25KZcMaZZGmCs4q7z162_JQcdQ/edit?usp=sharing",
+          "mode": "url"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "facturas_detalle",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": {},
+          "matchingColumns": [],
+          "schema": []
+        },
+        "options": {
+          "cellFormat": "RAW"
+        }
+      },
+      "id": "21cd64aa-9119-4729-ab57-1e5c35b8faf1",
+      "name": "Guardar detalle",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        1984,
+        240
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000,
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "9QFoVSojCdnkGFLE",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "return $input.all().map((it, i) => ({\n  json: {\n    timestamp: new Date().toISOString(),\n    workflow: 'SGF - Ingreso facturas',\n    estado: it.json.estado_validacion,\n    detalle: `Factura ${it.json.folio} de ${it.json.razon_social_emisor} (${it.json.origen})` +\n      (it.json.motivo_revision ? ' – ' + it.json.motivo_revision : ''),\n  },\n  pairedItem: { item: i },\n}));"
+      },
+      "id": "f036baef-0ce4-48fb-9050-70d37431768c",
+      "name": "Log OK",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2208,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "return $input.all().map((it, i) => ({\n  json: {\n    timestamp: new Date().toISOString(),\n    workflow: 'SGF - Ingreso facturas',\n    estado: 'ERROR',\n    detalle: 'Falló la llamada a la IA: ' + JSON.stringify(it.json.error || it.json).slice(0, 400),\n  },\n  pairedItem: { item: i },\n}));"
+      },
+      "id": "5eb6bc9d-984b-4d41-b878-5b028912a22f",
+      "name": "Log error",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        672,
+        448
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "https://docs.google.com/spreadsheets/d/1DX-iBKnZ8bsu-5b1b25KZcMaZZGmCs4q7z162_JQcdQ/edit?usp=sharing",
+          "mode": "url"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "logs",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": {},
+          "matchingColumns": [],
+          "schema": []
+        },
+        "options": {
+          "cellFormat": "RAW"
+        }
+      },
+      "id": "c5f39875-d2f2-4bdb-b988-03b3b5a4da05",
+      "name": "Guardar log",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        2432,
+        128
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000,
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "9QFoVSojCdnkGFLE",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "resource": "document",
+        "modelId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "claude-haiku-4-5-20251001"
+        },
+        "text": "Eres un asistente que extrae datos de facturas electrónicas chilenas (formato SII) recibidas por la clínica SGFertility.\nLee el documento adjunto y responde SOLO un objeto JSON válido, sin texto adicional ni bloques de código, con estas claves:\n- tipo_documento: \"factura_afecta\", \"factura_exenta\" o \"nota_credito\"\n- rut_emisor: RUT del EMISOR (recuadro superior derecho), con puntos y guion, ej. \"76.123.456-7\". Nunca uses el RUT del receptor SGFertility.\n- razon_social_emisor: nombre del emisor\n- folio: número de la factura, como texto\n- fecha_emision: formato YYYY-MM-DD\n- fecha_vencimiento: formato YYYY-MM-DD, o null si no aparece\n- condicion_pago: texto o null\n- monto_neto, monto_exento, iva, monto_total: números enteros en pesos, sin puntos ni signo $; usa 0 si no aparece\n- glosa: resumen breve de lo que se cobra (máximo 20 palabras)\n- numero_oc: número de orden de compra si la factura la referencia, o null\n- items: arreglo de objetos {\"descripcion\": texto, \"monto\": número} con el monto neto de cada línea de detalle\nReglas: copia los números exactamente como aparecen en el documento, no calcules ni corrijas montos, y no inventes datos; si un campo no aparece usa null (o 0 en montos).",
+        "inputType": "binary",
+        "options": {
+          "maxTokens": 2048
+        }
+      },
+      "id": "0944f75f-dc18-43dd-bd86-22ba028ef5cc",
+      "name": "Extraer con IA",
+      "type": "@n8n/n8n-nodes-langchain.anthropic",
+      "typeVersion": 1,
+      "position": [
+        224,
+        240
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "credentials": {
+        "anthropicApi": {
+          "id": null,
+          "name": "Gateway credits",
+          "__aiGatewayManaged": true
+        }
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "modelId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "claude-haiku-4-5-20251001"
+        },
+        "messages": {
+          "values": [
+            {
+              "content": "={{ $json.prompt }}"
+            }
+          ]
+        },
+        "options": {
+          "maxTokens": 512,
+          "temperature": 0
+        }
+      },
+      "id": "f4a05eee-367c-487f-b754-1ff8a726f1a3",
+      "name": "Clasificar con IA",
+      "type": "@n8n/n8n-nodes-langchain.anthropic",
+      "typeVersion": 1,
+      "position": [
+        1104,
+        240
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "credentials": {
+        "anthropicApi": {
+          "id": null,
+          "name": "Gateway credits",
+          "__aiGatewayManaged": true
+        }
+      },
+      "onError": "continueErrorOutput"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Correo con factura": {
+      "main": [
+        [
+          {
+            "node": "Separar adjuntos",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Separar adjuntos": {
+      "main": [
+        [
+          {
+            "node": "Leer catálogo",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Leer catálogo": {
+      "main": [
+        [
+          {
+            "node": "Documentos",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Documentos": {
+      "main": [
+        [
+          {
+            "node": "¿Es XML?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "¿Es XML?": {
+      "main": [
+        [
+          {
+            "node": "Leer XML (SII)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Preparar PDF",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Leer XML (SII)": {
+      "main": [
+        [
+          {
+            "node": "Validar y clasificar",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Leer respuesta IA": {
+      "main": [
+        [
+          {
+            "node": "Validar y clasificar",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validar y clasificar": {
+      "main": [
+        [
+          {
+            "node": "¿Necesita clasificación IA?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "¿Necesita clasificación IA?": {
+      "main": [
+        [
+          {
+            "node": "Preparar clasificación",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Preparar filas",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Leer clasificación": {
+      "main": [
+        [
+          {
+            "node": "Preparar filas",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Preparar filas": {
+      "main": [
+        [
+          {
+            "node": "Fila factura",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Filas detalle",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fila factura": {
+      "main": [
+        [
+          {
+            "node": "Guardar factura",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filas detalle": {
+      "main": [
+        [
+          {
+            "node": "Guardar detalle",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Guardar factura": {
+      "main": [
+        [
+          {
+            "node": "Log OK",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log OK": {
+      "main": [
+        [
+          {
+            "node": "Guardar log",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log error": {
+      "main": [
+        [
+          {
+            "node": "Guardar log",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Preparar PDF": {
+      "main": [
+        [
+          {
+            "node": "Extraer con IA",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extraer con IA": {
+      "main": [
+        [
+          {
+            "node": "Leer respuesta IA",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Log error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Preparar clasificación": {
+      "main": [
+        [
+          {
+            "node": "Clasificar con IA",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Clasificar con IA": {
+      "main": [
+        [
+          {
+            "node": "Leer clasificación",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Log error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "timeSavedMode": "fixed",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": true
+  },
+  "versionId": "53cd0989-a535-429a-b960-310c2fd077b8",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "aiBuilderAssisted": true,
+    "builderVariant": "mcp",
+    "instanceId": "8924fd36757bf5f50e263d8756a655f7dcfd036f5a781faeb1b0c2b1fc6319a9"
+  },
+  "nodeGroups": [],
+  "id": "29I9QLtxjie4Pa9n",
+  "tags": []
+}
